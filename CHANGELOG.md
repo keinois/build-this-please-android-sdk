@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## 0.2.0 (unreleased, paused)
 
 - Explicit host startup/foreground request preloading, account-scoped disk snapshots and immediate Compose hydration; cached lists remain visible offline while refreshed sections arrive independently.
 - Shared in-flight list reads, 60-second preload freshness, seven-day retention, bounded atomic cache storage, logout clearing, and race-safe vote/create/detail updates.

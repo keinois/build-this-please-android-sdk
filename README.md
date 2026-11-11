@@ -1,5 +1,8 @@
 # BuildThisPlease Android SDK
 
+> This branch prepares SDK 0.2.0 (paused). It has no published release tag or artifact yet; test using the local checkout.
+
+
 Reusable Android client and Jetpack Compose UI for the BuildThisPlease feature-request system. It shares the same projects, tickets, comments, votes, dashboard, and D1 database as the iOS SDK.
 
 The Compose surface mirrors the iOS workflow: counted title and description fields, optional support email, Requests/Mine/Done sections, status-aware voting, implemented release notes, installation-owned comment editing, locked conversations, adaptive large-screen navigation, pull-to-refresh, loading and empty states, and retry-safe mutations.
