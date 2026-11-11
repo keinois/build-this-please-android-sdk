@@ -1,6 +1,6 @@
 # BuildThisPlease Android SDK
 
-> This branch prepares SDK 0.1.6. It has no published release tag or artifact yet; test using the local checkout.
+> SDK 0.1.6 adds persistent request caching and host-owned startup/foreground preloading.
 
 
 Reusable Android client and Jetpack Compose UI for the BuildThisPlease feature-request system. It shares the same projects, tickets, comments, votes, dashboard, and D1 database as the iOS SDK.

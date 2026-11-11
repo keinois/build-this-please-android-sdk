@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.6 (unreleased)
+## 0.1.6
 
 - Preload Requests, Mine and Implemented in host-owned launch and foreground coroutines.
 - Persist separate cache-first list snapshots, refresh independently and preserve available content offline.
