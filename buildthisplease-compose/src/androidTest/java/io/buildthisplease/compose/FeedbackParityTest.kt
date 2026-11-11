@@ -2,6 +2,7 @@ package io.buildthisplease.compose
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -83,4 +84,16 @@ class FeedbackParityTest {
         compose.onNodeWithText("A filter for planned work would help.").performTouchInput { longClick() }
         compose.onNodeWithText("Edit message").assertIsDisplayed()
     }
+    @Test
+    fun switchingClientDoesNotRetainThePreviousAccountRequests() {
+        val first = MockBuildThisPleaseClient()
+        val second = MockBuildThisPleaseClient(scenario = MockBuildThisPleaseScenario.EMPTY)
+        val current = mutableStateOf(first)
+        compose.setContent { BuildThisPleaseFeedback(client = current.value, stateKey = "account-switch") }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Filter requests by status").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { current.value = second }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Filter requests by status").fetchSemanticsNodes().isEmpty() }
+        compose.onAllNodesWithText("Filter requests by status").assertCountEquals(0)
+    }
+
 }

@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,7 @@ import io.buildthisplease.core.BuildThisPleaseConfiguration
 import io.buildthisplease.core.MockBuildThisPleaseClient
 import io.buildthisplease.core.MockBuildThisPleaseScenario
 import io.buildthisplease.core.SubscriptionStatus
+import kotlinx.coroutines.CancellationException
 
 private enum class ExampleMode { MOCK, STAGING, PRODUCTION }
 private enum class SampleDestination { MENU, FEEDBACK, CONTROLS }
@@ -81,6 +83,12 @@ private fun SampleApp() {
     var destination by rememberSaveable { mutableStateOf(SampleDestination.MENU) }
     val client = remember(mode, scenario, subscription, resetGeneration) {
         sampleClient(context.applicationContext, mode, scenario, subscription)
+    }
+    // The host starts preloading while its own menu is visible. This effect owns cancellation;
+    // a real host should retain the account client in its application/account container.
+    LaunchedEffect(client) {
+        try { client.preloadRequests() }
+        catch (failure: Exception) { if (failure is CancellationException) throw failure }
     }
 
     BuildThisPleaseMaterialTheme(darkTheme = forceDarkMode || isSystemInDarkTheme()) {

@@ -2,6 +2,8 @@ package io.buildthisplease.compose
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -59,13 +61,14 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -119,7 +122,8 @@ fun BuildThisPleaseFeedback(
 ) {
     val model = feedbackViewModel(client, stateKey)
     val state by model.state.collectAsStateWithLifecycle()
-    var creating by rememberSaveable { mutableStateOf(false) }
+    var creating by rememberSaveable(client.identityScopeKey) { mutableStateOf(false) }
+    LaunchedEffect(model, creating) { if (creating) model.closeTicket() }
     BuildThisPleaseMaterialTheme(accent = theme.accent) {
         FeedbackTranslationScope(translationProvider, client, enabled = !creating) {
             CompositionLocalProvider(LocalBuildThisPleaseTheme provides theme) {
@@ -137,13 +141,18 @@ fun BuildThisPleaseFeedback(
                     )
                     state.selectedTicket != null -> TicketDetail(model, state, modifier, onBack = model::closeTicket)
                     else -> TicketBoard(
+                        client = client,
                         state = state,
                         modifier = modifier,
                         onBack = onBack,
-                        onCreate = { onCreateRequest?.invoke() ?: run { creating = true } },
+                        onCreate = { model.closeTicket(); onCreateRequest?.invoke() ?: run { creating = true } },
                         onRefresh = model::refreshCurrentSection,
+                        onResume = model::refreshIfStale,
                         onSelectSection = model::selectSection,
-                        onOpen = { ticket -> onOpenRequest?.invoke(ticket.id) ?: model.open(ticket) },
+                        onOpen = { ticket ->
+                            if (onOpenRequest != null) { model.closeTicket(); onOpenRequest(ticket.id) }
+                            else model.open(ticket)
+                        },
                         onVote = model::toggleVote,
                     )
                 }
@@ -170,13 +179,15 @@ fun BuildThisPleaseFeedbackList(
         FeedbackTranslationScope(translationProvider, client) {
             CompositionLocalProvider(LocalBuildThisPleaseTheme provides theme) {
                 TicketBoard(
+                    client = client,
                     state = state,
                     modifier = modifier,
                     onBack = onBack,
-                    onCreate = onCreateRequest,
+                    onCreate = { model.closeTicket(); onCreateRequest() },
                     onRefresh = model::refreshCurrentSection,
+                    onResume = model::refreshIfStale,
                     onSelectSection = model::selectSection,
-                    onOpen = { onOpenTicket(it.id) },
+                    onOpen = { model.closeTicket(); onOpenTicket(it.id) },
                     onVote = model::toggleVote,
                 )
             }
@@ -209,7 +220,7 @@ fun BuildThisPleaseTicketDetail(
                         if (state.error != null) ErrorState(state.error) { model.open(ticketId) }
                         else CircularProgressIndicator()
                     }
-                    BackHandler(onBack = onBack)
+                    BackHandler { model.closeTicket(); onBack() }
                 }
             }
         }
@@ -227,6 +238,7 @@ fun BuildThisPleaseCreateRequest(
 ) {
     val model = feedbackViewModel(client, stateKey)
     val state by model.state.collectAsStateWithLifecycle()
+    LaunchedEffect(model) { model.closeTicket() }
     BuildThisPleaseMaterialTheme(accent = theme.accent) {
         CompositionLocalProvider(LocalBuildThisPleaseTheme provides theme) {
             CreateTicketScreen(
@@ -244,22 +256,28 @@ fun BuildThisPleaseCreateRequest(
 
 @Composable
 private fun feedbackViewModel(client: BuildThisPleaseClientProtocol, stateKey: String): FeedbackViewModel =
-    viewModel(key = "BuildThisPlease:$stateKey") {
+    viewModel(key = "BuildThisPlease:${client.identityScopeKey}:$stateKey") {
         FeedbackViewModel(client, createSavedStateHandle())
     }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TicketBoard(
+    client: BuildThisPleaseClientProtocol,
     state: FeedbackUiState,
     modifier: Modifier,
     onBack: (() -> Unit)?,
     onCreate: () -> Unit,
     onRefresh: () -> Unit,
+    onResume: () -> Unit,
     onSelectSection: (FeedbackSection) -> Unit,
     onOpen: (Ticket) -> Unit,
     onVote: (Ticket) -> Unit,
 ) {
+    LifecycleResumeEffect(client) {
+        onResume()
+        onPauseOrDispose { }
+    }
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -383,15 +401,22 @@ private fun FeedbackContent(
     onVote: (Ticket) -> Unit,
 ) {
     PullToRefreshBox(
-        isRefreshing = state.isLoading && state.currentTickets.isNotEmpty(),
+        isRefreshing = state.isCurrentSectionRefreshing,
         onRefresh = onRetry,
         modifier = modifier.fillMaxSize(),
     ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         when {
-            state.isLoading && state.currentTickets.isEmpty() -> TicketListSkeleton()
-            state.error != null && state.currentTickets.isEmpty() -> ErrorState(state.error, onRetry)
-            state.currentTickets.isEmpty() -> EmptySection(state.section, onCreate)
+            state.isCurrentSectionInitialLoading -> TicketListSkeleton()
+            state.error != null && state.currentTickets.isEmpty() && state.section !in state.loadedSections -> ErrorState(state.error, onRetry)
+            state.currentTickets.isEmpty() -> Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                if (state.error != null) Box(Modifier.fillMaxWidth().padding(16.dp)) { ErrorBanner(state.error, onRetry) }
+                EmptySection(state.section, onCreate)
+            }
             else -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),

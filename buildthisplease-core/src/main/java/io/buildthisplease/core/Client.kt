@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.net.URLEncoder
+import java.io.File
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -26,7 +27,9 @@ class BuildThisPleaseClient(
 ) : BuildThisPleaseClientProtocol {
     private val appContext = context.applicationContext
     private var config = configuration.resolve(appContext)
-    private val prefix = (this.config.baseUrl + "\n" + this.config.projectKey).sha256Base64Url().take(18)
+    private val prefix = installationStoragePrefix(this.config)
+    private val requestCacheScope = requestCacheStorageScope(this.config)
+    override val identityScopeKey: String get() = prefix
     private val signer = signer ?: AndroidKeystoreInstallationSigner("btp.$prefix.installation")
     private val credentials = credentialStore ?: EncryptedNoBackupCredentialStore(
         appContext,
@@ -35,27 +38,62 @@ class BuildThisPleaseClient(
     )
     private val sessionMutex = Mutex()
     private var memorySession: StoredSession? = null
+    private var lastKnownInstallationId: String? = null
     private val json = buildThisPleaseJson
+    private val requestCache = RequestCache(File(appContext.cacheDir, "buildthisplease/requests"), requestCacheScope)
+    // Fixed stripes bound storage while keeping list downloads independent of ticket writes.
+    private val ticketMutationMutexes = Array(32) { Mutex() }
+
+    override suspend fun cachedRequests(): RequestSnapshot? = requestCache.snapshot(localCacheIdentity())
+    override suspend fun preloadRequests() {
+        val barrier = requestCache.clearBarrier()
+        preloadRequestLists(cachedRequests()) { section -> requestList(section, section.path, barrier) }
+    }
+    override suspend fun clearRequestCache() { requestCache.clear() }
+
+    private suspend fun localCacheIdentity(): RequestCacheIdentity? {
+        if (!signer.hasKey()) return null
+        val session = memorySession ?: credentials.readSession() ?: return null
+        return RequestCacheIdentity(session.installationId, signer.keyId)
+    }
+
+    private suspend fun requestList(section: RequestList, path: String, clearBarrier: Long? = null): List<Ticket> {
+        val barrier = clearBarrier ?: requestCache.clearBarrier()
+        return requestCache.fetch(section, localCacheIdentity(), ::localCacheIdentity, barrier) { get(path, TicketPage.serializer()).items }
+    }
 
     override suspend fun configuration(): ProjectConfiguration = get("/v1/config", ProjectConfiguration.serializer())
-    override suspend fun requests(): List<Ticket> = get("/v1/tickets?limit=100", TicketPage.serializer()).items
-    override suspend fun myRequests(): List<Ticket> = get("/v1/me/tickets?limit=100", TicketPage.serializer()).items
-    override suspend fun implementedRequests(): List<Ticket> = get("/v1/implemented?limit=100", TicketPage.serializer()).items
-    override suspend fun ticket(id: String): Ticket = get("/v1/tickets/${id.pathComponent()}", TicketEnvelope.serializer()).ticket
+    override suspend fun requests(): List<Ticket> = requestList(RequestList.REQUESTS, "/v1/tickets?limit=100")
+    override suspend fun myRequests(): List<Ticket> = requestList(RequestList.MINE, "/v1/me/tickets?limit=100")
+    override suspend fun implementedRequests(): List<Ticket> = requestList(RequestList.IMPLEMENTED, "/v1/implemented?limit=100")
+    override suspend fun ticket(id: String): Ticket = requestCache.ticket(::localCacheIdentity, requestedId = id) {
+        get("/v1/tickets/${id.pathComponent()}", TicketEnvelope.serializer()).ticket
+    }
     override suspend fun comments(ticketId: String): List<Comment> =
         get("/v1/tickets/${ticketId.pathComponent()}/comments", CommentPage.serializer()).items
 
     override suspend fun createTicket(title: String, description: String, email: String?, idempotencyKey: String): Ticket {
-        val body = TicketInput(title.trim(), description.trim(), email.normalized()?.lowercase(), config.appVersion.normalized())
-        return mutate("POST", "/v1/tickets", body, TicketInput.serializer(), TicketEnvelope.serializer(), idempotencyKey).ticket
+        val operation = requestCache.operation(retainTicketChanges = true)
+        try {
+            val body = TicketInput(title.trim(), description.trim(), email.normalized()?.lowercase(), config.appVersion.normalized())
+            val ticket = mutate("POST", "/v1/tickets", body, TicketInput.serializer(), TicketEnvelope.serializer(), idempotencyKey).ticket
+            return requestCache.update(ticket, true, operation, localCacheIdentity())
+        } finally { requestCache.finishTicketOperation() }
     }
 
-    override suspend fun setVote(ticketId: String, voted: Boolean): Ticket = mutateRaw(
-        if (voted) "PUT" else "DELETE",
-        "/v1/tickets/${ticketId.pathComponent()}/vote",
-        ByteArray(0),
-        TicketEnvelope.serializer(),
-    ).ticket
+    override suspend fun setVote(ticketId: String, voted: Boolean): Ticket {
+        // Capture the clear barrier before waiting; queued calls cannot repopulate a cleared cache.
+        val operation = requestCache.operation()
+        return ticketMutationMutexes[(ticketId.hashCode() and Int.MAX_VALUE) % ticketMutationMutexes.size].withLock {
+            val ticket = mutateRaw(
+                if (voted) "PUT" else "DELETE",
+                "/v1/tickets/${ticketId.pathComponent()}/vote",
+                ByteArray(0),
+                TicketEnvelope.serializer(),
+            ).ticket
+            requestCache.update(ticket, false, operation, localCacheIdentity(), requestedId = ticketId)
+        }
+    }
 
     override suspend fun createComment(ticketId: String, body: String, idempotencyKey: String): Comment = mutate(
         "POST",
@@ -140,11 +178,15 @@ class BuildThisPleaseClient(
         memorySession?.takeIf { it.isUsable() }?.let { return@withLock it }
         credentials.readSession()?.takeIf { it.isUsable() }?.let {
             memorySession = it
+            lastKnownInstallationId = it.installationId
             return@withLock it
         }
+        val previousId = lastKnownInstallationId ?: credentials.readSession()?.installationId
         val established = establishSession()
+        if (previousId != null && previousId != established.installationId) requestCache.clear(installationReplacement = true)
         credentials.writeSession(established)
         memorySession = established
+        lastKnownInstallationId = established.installationId
         established
     }
 
@@ -154,6 +196,7 @@ class BuildThisPleaseClient(
                 return recoverSession()
             } catch (failure: BuildThisPleaseException.Server) {
                 if (failure.code != "android_key_not_registered") throw failure
+                requestCache.clear(installationReplacement = true)
                 signer.reset()
                 credentials.clearSession()
             }
@@ -277,6 +320,19 @@ private fun parseIso(value: String): Date? = listOf("yyyy-MM-dd'T'HH:mm:ss.SSSX"
 private fun isoNow(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
 private fun String.pathComponent(): String = URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
 private fun String?.normalized(): String? = this?.trim()?.takeIf(String::isNotEmpty)
+
+// Keep existing installation keys/credentials discoverable across SDK upgrades.
+internal fun installationStoragePrefix(config: BuildThisPleaseConfiguration): String =
+    (config.baseUrl + "\n" + config.projectKey + (config.identityNamespace?.let { "\n" + it } ?: "")).sha256Base64Url().take(18)
+
+internal fun requestCacheStorageScope(config: BuildThisPleaseConfiguration): String =
+    buildThisPleaseJson.encodeToString(listOf(config.baseUrl, config.environment.wireValue, config.projectKey, config.packageName, config.identityNamespace)).sha256Base64Url()
+
+private val RequestList.path: String get() = when (this) {
+    RequestList.REQUESTS -> "/v1/tickets?limit=100"
+    RequestList.MINE -> "/v1/me/tickets?limit=100"
+    RequestList.IMPLEMENTED -> "/v1/implemented?limit=100"
+}
 
 @Suppress("DEPRECATION")
 private fun signingCertificateSha256(context: Context): String {

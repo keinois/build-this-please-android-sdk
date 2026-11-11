@@ -22,6 +22,41 @@ class MockBuildThisPleaseClient(
     private val comments = (if (scenario == MockBuildThisPleaseScenario.EMPTY) emptyMap() else initialComments).mapValues { it.value.toMutableList() }.toMutableMap()
     private val mine = tickets.map(Ticket::id).toMutableSet()
     private var subscriptionStatus = initialSubscriptionStatus
+    private var requestSnapshot: RequestSnapshot? = null
+    private var cacheGeneration = 0L
+
+    override suspend fun cachedRequests(): RequestSnapshot? = mutex.withLock { requestSnapshot }
+    override suspend fun clearRequestCache() { mutex.withLock { cacheGeneration++; requestSnapshot = null } }
+
+    private suspend fun requestList(section: RequestList, source: () -> List<Ticket>): List<Ticket> {
+        val generation = mutex.withLock { cacheGeneration }
+        prepare()
+        return mutex.withLock {
+            source().also { items ->
+                if (generation == cacheGeneration) {
+                    val list = CachedRequestList(items, System.currentTimeMillis())
+                    val snapshot = requestSnapshot ?: RequestSnapshot()
+                    requestSnapshot = when (section) {
+                        RequestList.REQUESTS -> snapshot.copy(requests = list)
+                        RequestList.MINE -> snapshot.copy(mine = list)
+                        RequestList.IMPLEMENTED -> snapshot.copy(implemented = list)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun cacheTicket(ticket: Ticket, created: Boolean = false) {
+        fun List<Ticket>.replace() = map { if (it.id == ticket.id) ticket else it }
+        requestSnapshot = (requestSnapshot ?: if (created) RequestSnapshot() else null)?.let { value ->
+            value.copy(
+                requests = value.requests?.let { it.copy(items = it.items.replace()) },
+                mine = value.mine?.let { it.copy(items = if (created) listOf(ticket) + it.items.filterNot { it.id == ticket.id } else it.items.replace()) }
+                    ?: if (created) CachedRequestList(listOf(ticket), System.currentTimeMillis(), isComplete = false) else null,
+                implemented = value.implemented?.let { it.copy(items = it.items.replace()) },
+            )
+        }
+    }
 
     override suspend fun configuration(): ProjectConfiguration {
         prepare()
@@ -30,17 +65,14 @@ class MockBuildThisPleaseClient(
             ProjectConfiguration.Capabilities(true, true),
         )
     }
-    override suspend fun requests(): List<Ticket> { prepare(); return mutex.withLock { tickets.filter { it.status in publicStatuses }.toList() } }
-    override suspend fun myRequests(): List<Ticket> {
-        prepare()
-        return mutex.withLock {
+    override suspend fun requests(): List<Ticket> = requestList(RequestList.REQUESTS) { tickets.filter { it.status in publicStatuses }.toList() }
+    override suspend fun myRequests(): List<Ticket> = requestList(RequestList.MINE) {
             tickets.filter { it.id in mine }
                 .map { value -> value.canonicalTicketId?.let { destination -> tickets.firstOrNull { it.id == destination } } ?: value }
                 .distinctBy(Ticket::id)
-        }
     }
-    override suspend fun implementedRequests(): List<Ticket> { prepare(); return mutex.withLock { tickets.filter { it.status == TicketStatus.IMPLEMENTED }.toList() } }
-    override suspend fun ticket(id: String): Ticket { prepare(); return mutex.withLock { tickets.first { it.id == id }.let { value -> value.canonicalTicketId?.let { destination -> tickets.firstOrNull { it.id == destination } } ?: value } } }
+    override suspend fun implementedRequests(): List<Ticket> = requestList(RequestList.IMPLEMENTED) { tickets.filter { it.status == TicketStatus.IMPLEMENTED }.toList() }
+    override suspend fun ticket(id: String): Ticket { prepare(); return mutex.withLock { tickets.first { it.id == id }.let { value -> value.canonicalTicketId?.let { destination -> tickets.firstOrNull { it.id == destination } } ?: value }.also { cacheTicket(it) } } }
     override suspend fun comments(ticketId: String): List<Comment> { prepare(); return mutex.withLock { comments[ticketId]?.toList().orEmpty() } }
     override suspend fun createTicket(title: String, description: String, email: String?, idempotencyKey: String): Ticket {
         prepare()
@@ -49,6 +81,7 @@ class MockBuildThisPleaseClient(
         Ticket(UUID.randomUUID().toString(), title.trim(), description.trim(), TicketStatus.PENDING, createdAt = now, updatedAt = now).also {
             tickets.add(0, it)
             mine += it.id
+            cacheTicket(it, created = true)
         }
         }
     }
@@ -62,6 +95,7 @@ class MockBuildThisPleaseClient(
             voteCount = (current.voteCount ?: 0) + if (voted && current.hasVoted != true) 1 else if (!voted && current.hasVoted == true) -1 else 0,
         )
         tickets[index] = updated
+        cacheTicket(updated)
         updated
         }
     }

@@ -6,15 +6,17 @@ import androidx.lifecycle.viewModelScope
 import io.buildthisplease.core.BuildThisPleaseClientProtocol
 import io.buildthisplease.core.Comment
 import io.buildthisplease.core.Ticket
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 internal class FeedbackViewModel(
-    client: BuildThisPleaseClientProtocol,
+    val client: BuildThisPleaseClientProtocol,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val restoredTicketId = savedStateHandle.get<String>(SELECTED_TICKET_KEY)
+    private var ticketNavigationRevision = 0L
     private val controller = FeedbackController(
         client = client,
         initialSection = savedStateHandle.get<String>(SECTION_KEY)
@@ -31,23 +33,30 @@ internal class FeedbackViewModel(
         }
         viewModelScope.launch {
             controller.load()
-            restoredTicketId?.let { controller.open(it) }
+            if (ticketNavigationRevision == 0L) {
+                restoredTicketId?.let { controller.open(it) }
+            }
         }
     }
 
-    fun selectSection(section: FeedbackSection) = controller.selectSection(section)
+    fun selectSection(section: FeedbackSection) {
+        closeTicket()
+        controller.selectSection(section)
+    }
     fun clearError() = controller.clearError()
     fun closeTicket() {
+        ticketNavigationRevision++
         savedStateHandle[SELECTED_TICKET_KEY] = null
         controller.closeTicket()
     }
+    fun refreshIfStale() = launch { controller.load() }
     fun refreshCurrentSection() = launch { controller.refreshCurrentSection() }
-    fun refreshTicket(ticket: Ticket) = launch { controller.open(ticket) }
-    fun open(ticket: Ticket) = launch {
+    fun refreshTicket(ticket: Ticket) = launchTicketNavigation { controller.open(ticket) }
+    fun open(ticket: Ticket) = launchTicketNavigation {
         savedStateHandle[SELECTED_TICKET_KEY] = ticket.id
         controller.open(ticket)
     }
-    fun open(ticketId: String) = launch {
+    fun open(ticketId: String) = launchTicketNavigation {
         savedStateHandle[SELECTED_TICKET_KEY] = ticketId
         controller.open(ticketId)
     }
@@ -59,13 +68,22 @@ internal class FeedbackViewModel(
         email: String?,
         idempotencyKey: String,
         onResult: (Boolean) -> Unit,
-    ) = launch { onResult(controller.create(title, description, email, idempotencyKey)) }
+    ): Job {
+        closeTicket()
+        return launch { onResult(controller.create(title, description, email, idempotencyKey)) }
+    }
 
     fun reply(body: String, idempotencyKey: String, onResult: (Boolean) -> Unit) =
         launch { onResult(controller.reply(body, idempotencyKey)) }
 
     fun edit(comment: Comment, body: String, onResult: (Boolean) -> Unit) =
         launch { onResult(controller.edit(comment, body)) }
+
+    private fun launchTicketNavigation(block: suspend () -> Unit): Job {
+        // Claim navigation before dispatch, including calls made before startup runs.
+        val revision = ++ticketNavigationRevision
+        return launch { if (ticketNavigationRevision == revision) block() }
+    }
 
     private fun launch(block: suspend () -> Unit) = viewModelScope.launch { block() }
 

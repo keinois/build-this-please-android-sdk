@@ -1,5 +1,8 @@
 # BuildThisPlease Android SDK
 
+> This branch prepares SDK 0.1.6. It has no published release tag or artifact yet; test using the local checkout.
+
+
 Reusable Android client and Jetpack Compose UI for the BuildThisPlease feature-request system. It shares the same projects, tickets, comments, votes, dashboard, and D1 database as the iOS SDK.
 
 The Compose surface mirrors the iOS workflow: counted title and description fields, optional support email, Requests/Mine/Done sections, status-aware voting, implemented release notes, installation-owned comment editing, locked conversations, adaptive large-screen navigation, pull-to-refresh, loading and empty states, and retry-safe mutations.
@@ -23,7 +26,7 @@ includeBuild("../BuildThisPleaseAndroidSDK")
 Then add:
 
 ```kotlin
-    implementation("io.github.rosday:buildthisplease-compose:0.1.5")
+    implementation("io.github.rosday:buildthisplease-compose:0.1.6")
 ```
 
 Create one client at application scope and display it from Compose:
@@ -106,7 +109,7 @@ establish eligibility: the device must have a supported AICore model already ins
 For local composite-build integration, replace the Compose dependency with:
 
 ```kotlin
-implementation("io.github.rosday:buildthisplease-nano:0.1.5")
+implementation("io.github.rosday:buildthisplease-nano:0.1.6")
 ```
 
 The new artifact is available from this checkout; it will be available on Maven Central only after
@@ -209,3 +212,13 @@ The SDK is released under the MIT License. Tagged releases are published to Mave
 See [SECURITY.md](SECURITY.md) for the trust model and operational cautions.
 
 Each submitted request includes the host app version as private backend metadata. The version is captured from the SDK configuration (which defaults to the host app version) and is not included in public request responses.
+
+## Request loading and caching (0.1.6)
+
+Create and retain the account's `BuildThisPleaseClient` when the host app opens, then launch `client.preloadRequests()` from a host-owned coroutine scope without blocking startup. Use that same client for `BuildThisPleaseFeedback`. Call preload again when the app returns to the foreground: complete lists fetched in the last 60 seconds are reused, and concurrent startup/screen reads share each endpoint request. The SDK starts no networking in its initializer and installs no background refresh job.
+
+Compose displays the disk snapshot before fetching stale or missing sections, publishes each successful section immediately, and keeps cached lists visible during refresh or offline failures. A successful empty response removes old items. Explicit `requests()`, `myRequests()`, `implementedRequests()` and pull-to-refresh fetch current server data. Successful votes, creation and detail loads update cached lists; changes from the dashboard appear on a later refresh or preload, without a real-time connection.
+
+`cachedRequests()` reads an optional `RequestSnapshot` without networking. Each nullable `CachedRequestList` contains `items`, `updatedAt` (epoch milliseconds), `isComplete`, and `isFresh()`. Null means not loaded/expired; an empty list means successfully loaded empty. A newly created Mine item can appear in a partial list (`isComplete = false`) until its first complete refresh. The cache retains each list for seven days, uses atomic best-effort writes in app-private `cacheDir` (excluded from backups), and bounds request cache files together to 8 MiB. Android can evict these files at any time. The cache stores request fields; it excludes credentials, RevenueCat IDs, support-email metadata and notification preferences.
+
+On logout, first dispose the previous account's feedback UI and cancel and join its host jobs. Await `clearRequestCache()` before releasing that client, then create the next client with a stable account-specific `identityNamespace`. Use a separate stable signed-out namespace. The cache includes the API URL, environment, project, package, namespace and installation/key identity in its scope. Changing email/RevenueCat metadata does not change accounts; `updateUserIdentity()` is not an account-switch API. See [the compiling startup, foreground and account-switch examples](docs/RequestCaching.md). Custom/mock clients remain source-compatible through protocol defaults; `MockBuildThisPleaseClient` keeps an in-memory snapshot.
