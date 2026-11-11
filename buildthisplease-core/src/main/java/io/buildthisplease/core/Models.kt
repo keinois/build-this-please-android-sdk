@@ -39,6 +39,7 @@ data class Ticket(
     val canonicalTicketId: String? = null,
     val voteCount: Int? = null,
     val hasVoted: Boolean? = null,
+    val voteLocked: Boolean = false,
 )
 
 @Serializable

@@ -1,6 +1,20 @@
 package io.buildthisplease.core
 
 interface BuildThisPleaseClientProtocol {
+    /** Opaque project/account scope for retained UI state. Custom clients must change it on account switches. */
+    val identityScopeKey: String get() = "${javaClass.name}:${System.identityHashCode(this)}"
+    /** Local-only snapshot. Custom clients may opt out by returning null. */
+    suspend fun cachedRequests(): RequestSnapshot? = null
+    /** Call from a host-owned startup/foreground scope using the retained account client. */
+    suspend fun preloadRequests() { preloadRequestLists(cachedRequests()) }
+    /** Clear before disposing this client's account scope; in-flight reads cannot restore the cache. */
+    suspend fun clearRequestCache() {}
+    suspend fun notifications(cursor: String? = null): NotificationPage = NotificationPage()
+    suspend fun markNotificationsRead(ids: List<String>) {}
+    suspend fun notificationPreferences(): NotificationPreferences = NotificationPreferences()
+    suspend fun updateNotificationPreferences(email: String? = null, emailEnabled: Boolean? = null, localNotificationsEnabled: Boolean? = null): NotificationPreferences = throw BuildThisPleaseException.InvalidResponse()
+    suspend fun following(ticketId: String): Boolean = false
+    suspend fun setFollowing(ticketId: String, following: Boolean) { throw BuildThisPleaseException.InvalidResponse() }
     suspend fun configuration(): ProjectConfiguration
     suspend fun requests(): List<Ticket>
     suspend fun myRequests(): List<Ticket>

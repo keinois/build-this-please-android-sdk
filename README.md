@@ -23,7 +23,7 @@ includeBuild("../BuildThisPleaseAndroidSDK")
 Then add:
 
 ```kotlin
-    implementation("io.github.rosday:buildthisplease-compose:0.1.5")
+    implementation("io.github.rosday:buildthisplease-compose:0.2.0")
 ```
 
 Create one client at application scope and display it from Compose:
@@ -106,7 +106,7 @@ establish eligibility: the device must have a supported AICore model already ins
 For local composite-build integration, replace the Compose dependency with:
 
 ```kotlin
-implementation("io.github.rosday:buildthisplease-nano:0.1.5")
+implementation("io.github.rosday:buildthisplease-nano:0.2.0")
 ```
 
 The new artifact is available from this checkout; it will be available on Maven Central only after
@@ -209,3 +209,25 @@ The SDK is released under the MIT License. Tagged releases are published to Mave
 See [SECURITY.md](SECURITY.md) for the trust model and operational cautions.
 
 Each submitted request includes the host app version as private backend metadata. The version is captured from the SDK configuration (which defaults to the host app version) and is not included in public request responses.
+
+## Request loading and caching (0.2.0)
+
+Create and retain the account's `BuildThisPleaseClient` when the host app opens, then launch `client.preloadRequests()` from a host-owned coroutine scope without blocking startup. Use that same client for `BuildThisPleaseFeedback`. Call preload again when the app returns to the foreground: complete lists fetched in the last 60 seconds are reused, and concurrent startup/screen reads share each endpoint request. The SDK starts no networking in its initializer and installs no background refresh job.
+
+Compose displays the disk snapshot before fetching stale or missing sections, publishes each successful section immediately, and keeps cached lists visible during refresh or offline failures. A successful empty response removes old items. Explicit `requests()`, `myRequests()`, `implementedRequests()` and pull-to-refresh fetch current server data. Successful votes, creation and detail loads update cached lists; changes from the dashboard appear on a later refresh or preload, without a real-time connection.
+
+`cachedRequests()` reads an optional `RequestSnapshot` without networking. Each nullable `CachedRequestList` contains `items`, `updatedAt` (epoch milliseconds), `isComplete`, and `isFresh()`. Null means not loaded/expired; an empty list means successfully loaded empty. A newly created Mine item can appear in a partial list (`isComplete = false`) until its first complete refresh. The cache retains each list for seven days, uses atomic best-effort writes in app-private `cacheDir` (excluded from backups), and bounds request cache files together to 8 MiB. Android can evict these files at any time. The cache stores request fields; it excludes credentials, RevenueCat IDs, support-email metadata and notification preferences.
+
+On logout, first dispose the previous account's feedback UI and cancel and join its host jobs. Await `clearRequestCache()` before releasing that client, then create the next client with a stable account-specific `identityNamespace`. Use a separate stable signed-out namespace. The cache includes the API URL, environment, project, package, namespace and installation/key identity in its scope. Changing email/RevenueCat metadata does not change accounts; `updateUserIdentity()` is not an account-switch API. See [the compiling startup, foreground and account-switch examples](docs/RequestCaching.md). Custom/mock clients remain source-compatible through protocol defaults; `MockBuildThisPleaseClient` keeps an in-memory snapshot.
+
+## Completion updates (0.2.0)
+
+The feedback board includes an Updates destination with unread history, email verification preferences and optional local alerts. Hosts can navigate directly to `BuildThisPleaseUpdates(client, onBack, onOpenTicket)`. Each request starts with one permanent author vote; follow/mute is independent.
+
+Retain a `BuildThisPleaseNotificationSync(applicationContext, client, namespace)` per project/account. Call `synchronize()` on app activation for the unread count, and `synchronize(inBackground = true)` from your host-owned WorkManager worker to post new unread local alerts. The SDK does not install a Worker or choose a background schedule for the host. WorkManager execution is OS-controlled. Android 13+ requires POST_NOTIFICATIONS authorization; the preference screen requests it only after the user enables local alerts. The SDK provides a dedicated notification channel and small icon. The notification intent contains `buildThisPleaseTicketId` and `buildThisPleaseNotificationId`; route these through your existing launch-intent handler. Email app links use the same ticket ID query parameter on the dashboard-configured HTTPS URL.
+
+Email uses Cloudflare and is enabled only after the user confirms the emailed form. In-app updates require no email or RevenueCat. Verification links can connect inboxes using that email within the same project; private request/comment ownership and installation keys remain separate.
+
+For host-authenticated cross-device inboxes, set a stable per-account `identityNamespace` in configuration, obtain `client.installationIdentifier()`, ask your authenticated backend for an installation-bound proof and call `client.linkUserIdentity(token)`. A raw RevenueCat App User ID is never enough to recover another installation's notifications. The optional Worker secret `IDENTITY_SIGNING_KEYS` maps project IDs to per-project random HS256 secrets of 32+ characters, held only by the Worker and that project's host backend. Claims: issuer `buildthisplease-host`, audience the BuildThisPlease project ID, subject the stable RevenueCat/host ID, `installationId`, `iat`, `exp`, lifetime <=300 seconds. The host backend authenticates its user and derives the subject itself.
+
+On account switching, dispose the previous feedback UI and synchronizer and create a client with the next account namespace. Retained Compose ViewModels are keyed by `client.identityScopeKey` plus the host `stateKey`; the concrete client derives that scope from the project and account namespace. Custom client implementations must change `identityScopeKey` when switching accounts. Pass the same `stateKey` to list/detail/create destinations, clear the host navigation stack on sign-out, and cancel background work for the previous account. Keep a separate stable namespace for signed-out usage. Do not reuse notification caches across users. Anonymous RevenueCat IDs can change after reinstall. Deploy the shared 0.2.0 backend with migrations through 0017 before releasing the SDKs; local builds do not verify live Play Integrity, email delivery or background timing.

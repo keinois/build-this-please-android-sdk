@@ -13,6 +13,7 @@ data class BuildThisPleaseConfiguration(
     val packageName: String? = null,
     val appVersion: String? = null,
     val osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+    val identityNamespace: String? = null,
 ) {
     enum class Environment(val wireValue: String) {
         DEVELOPMENT("development"),

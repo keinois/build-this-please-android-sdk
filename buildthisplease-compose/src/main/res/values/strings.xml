@@ -50,4 +50,25 @@
     <string name="btp_status_rejected">Rejected</string>
     <string name="btp_status_merged">Merged</string>
     <string name="btp_status_archived">Archived</string>
+    <string name="btp_updates">Updates</string>
+    <string name="btp_updates_count">Updates (%1$d)</string>
+    <string name="btp_no_updates">No updates yet</string>
+    <string name="btp_updates_empty_detail">Completed requests you follow will appear here.</string>
+    <string name="btp_available_version">Available in version %1$s</string>
+    <string name="btp_unread">Unread</string>
+    <string name="btp_load_more">Load more</string>
+    <string name="btp_notification_preferences">Notification preferences</string>
+    <string name="btp_enable_completion_email">Email me when requests ship</string>
+    <string name="btp_verify_email_detail">Check your email to confirm updates. The link expires in 24 hours.</string>
+    <string name="btp_stop_completion_email">Stop completion emails</string>
+    <string name="btp_local_notifications">Local notifications</string>
+    <string name="btp_local_notifications_detail">Local alerts arrive after a background sync. The app controls background refresh. You can follow requests without sharing an email.</string>
+    <string name="btp_preferences_saved">Preferences saved.</string>
+    <string name="btp_notifications_denied">Allow notifications in system Settings to enable local alerts.</string>
+    <string name="btp_refresh_updates">Refresh updates</string>
+    <string name="btp_stop_updates">Stop updates</string>
+    <string name="btp_follow_request">Follow request</string>
+    <string name="btp_email_when_ships">Email me when followed requests ship</string>
+    <string name="btp_confirm_email_setup">Confirm the email we send to enable updates for requests you follow.</string>
+    <string name="btp_author_vote_permanent">Author vote (permanent)</string>
 </resources>

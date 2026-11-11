@@ -71,10 +71,11 @@ internal fun CreateTicketScreen(
     error: String?,
     onDismiss: () -> Unit,
     onClearError: () -> Unit,
-    onCreate: (title: String, description: String, email: String?, idempotencyKey: String) -> Unit,
+    onCreate: (title: String, description: String, email: String?, emailUpdates: Boolean, idempotencyKey: String) -> Unit,
 ) {
     var title by rememberSaveable { mutableStateOf("") }
     var description by rememberSaveable { mutableStateOf("") }
+    var emailUpdates by rememberSaveable { mutableStateOf(false) }
     var email by rememberSaveable { mutableStateOf("") }
     val idempotencyKey by rememberSaveable { mutableStateOf(newIdempotencyKey()) }
     val titleFocus = remember { FocusRequester() }
@@ -100,7 +101,7 @@ internal fun CreateTicketScreen(
         bottomBar = {
             Surface(modifier = Modifier.imePadding(), tonalElevation = 3.dp) {
                 Button(
-                    onClick = { onCreate(cleanTitle, cleanDescription, cleanEmail.ifEmpty { null }, idempotencyKey) },
+                    onClick = { onCreate(cleanTitle, cleanDescription, cleanEmail.ifEmpty { null }, emailUpdates, idempotencyKey) },
                     enabled = valid && !isSaving,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -157,9 +158,14 @@ internal fun CreateTicketScreen(
                 )
                 EmailField(
                     value = email,
-                    onValueChange = { email = it; onClearError() },
+                    onValueChange = { email = it; if (it.isBlank() || !isValidRequestEmail(it)) emailUpdates = false; onClearError() },
                     isValid = isValidRequestEmail(email),
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.Checkbox(checked = emailUpdates, onCheckedChange = { emailUpdates = it }, enabled = cleanEmail.isNotEmpty() && isValidRequestEmail(email))
+                    Text(stringResource(R.string.btp_email_when_ships))
+                }
+                if (emailUpdates) Text(stringResource(R.string.btp_confirm_email_setup), style = MaterialTheme.typography.bodySmall)
                 error?.let { FormError(it) }
             }
         }

@@ -2,7 +2,10 @@ package io.buildthisplease.compose
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
@@ -83,4 +86,37 @@ class FeedbackParityTest {
         compose.onNodeWithText("A filter for planned work would help.").performTouchInput { longClick() }
         compose.onNodeWithText("Edit message").assertIsDisplayed()
     }
+    @Test
+    fun switchingClientDoesNotRetainThePreviousAccountRequests() {
+        val first = MockBuildThisPleaseClient()
+        val second = MockBuildThisPleaseClient(scenario = MockBuildThisPleaseScenario.EMPTY)
+        val current = mutableStateOf(first)
+        compose.setContent { BuildThisPleaseFeedback(client = current.value, stateKey = "account-switch") }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Filter requests by status").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { current.value = second }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Filter requests by status").fetchSemanticsNodes().isEmpty() }
+        compose.onAllNodesWithText("Filter requests by status").assertCountEquals(0)
+    }
+
+    @Test
+    fun updatesExposeCompletionAndOptionalPreferences() {
+        compose.setContent { BuildThisPleaseUpdates(MockBuildThisPleaseClient(), onBack = {}, onOpenTicket = {}) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Implemented release notes").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Implemented release notes").assertIsDisplayed()
+        compose.onNodeWithText("Local notifications").assertIsDisplayed()
+    }
+
+    @Test
+    fun votingRefreshesTheRequestFollowControl() {
+        val client = MockBuildThisPleaseClient()
+        compose.setContent { BuildThisPleaseFeedback(client = client, stateKey = "vote-follow") }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Filter requests by status").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Filter requests by status").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Follow request").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Vote for this request")).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Stop updates").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Stop updates").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Follow request").fetchSemanticsNodes().isNotEmpty() }
+    }
+
 }
